@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Built database and the dataset itself — never committed
+*.duckdb
+data/*.csv
+
+# Secrets
+.env
+
+# Graphify (leaks absolute local paths)
+graphify-out/
+
+.pytest_cache/
+.DS_Store
+.vscode/
+.idea/
