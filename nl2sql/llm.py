@@ -60,3 +60,81 @@ def generate_sql(
     text = "".join(block.text for block in message.content if block.type == "text")
     payload = _extract_json(text)
     return payload.get("sql", "").strip(), payload.get("explanation", "").strip()
+
+
+# --- analyst tool-use driver (the --live path for nl2sql.analyst) -----------
+
+_NUMBER_RE = re.compile(r"-?\d[\d,]*\.?\d*")
+
+_ANALYST_SYSTEM = (
+    "You are a data analyst. Answer the user's question by calling tools to run SQL "
+    "and compute values. NEVER state a number you did not obtain from a tool result. "
+    "When you have the answer, reply in plain text stating it clearly.\n\nSchema:\n{schema}"
+)
+
+
+def _first_number(text: str):
+    """Best-effort: pull the first numeric literal out of the model's final text."""
+    match = _NUMBER_RE.search(text or "")
+    if not match:
+        return None
+    token = match.group(0).replace(",", "")
+    try:
+        return float(token) if ("." in token) else int(token)
+    except ValueError:
+        return None
+
+
+def tool_use_driver(model: str | None = None, max_tokens: int = 1024):
+    """Return a stateful ``drive(question, schema_text, trace)`` backed by Claude tool-use.
+
+    ``anthropic`` is imported lazily, so the analyst runs offline (with a scripted
+    driver) without the SDK or an API key present.
+    """
+    import anthropic  # lazy
+
+    from .tools import TOOLS
+
+    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
+    state: dict = {"messages": None, "system": None, "last_tool_use_id": None}
+
+    def drive(question: str, schema_text: str, trace: list) -> dict:
+        if state["messages"] is None:
+            state["system"] = _ANALYST_SYSTEM.format(schema=schema_text)
+            state["messages"] = [{"role": "user", "content": f"Question: {question}"}]
+        else:
+            last = trace[-1]
+            payload = last.result if last.ok else {"error": last.error}
+            state["messages"].append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": state["last_tool_use_id"],
+                            "content": json.dumps(payload, default=str),
+                        }
+                    ],
+                }
+            )
+
+        message = client.messages.create(
+            model=model or DEFAULT_MODEL,
+            max_tokens=max_tokens,
+            system=state["system"],
+            tools=TOOLS,
+            messages=state["messages"],
+        )
+        state["messages"].append({"role": "assistant", "content": message.content})
+
+        tool_use = next(
+            (b for b in message.content if getattr(b, "type", None) == "tool_use"), None
+        )
+        if tool_use is not None:
+            state["last_tool_use_id"] = tool_use.id
+            return {"type": "tool", "tool": tool_use.name, "args": dict(tool_use.input)}
+
+        text = "".join(b.text for b in message.content if getattr(b, "type", None) == "text")
+        return {"type": "final", "answer": text.strip(), "value": _first_number(text)}
+
+    return drive

@@ -30,7 +30,37 @@ describe_schema(con) ──▶ llm.generate_sql() ──▶ safety.validate_sql(
                                                    Answer(sql, rows, attempts)
 ```
 
-## Como rodar
+## Modo analista — computa o número, não só escreve SQL
+
+Text-to-SQL te devolve linhas. Mas quando a pergunta real é *"qual o ticket médio dos pedidos?"*, a resposta é um **número** — e um modelo de linguagem recitando um número é um número em que você não pode confiar.
+
+O modo analista fecha essa lacuna com **tool-calling sobre um sandbox**. O agente tem duas tools — `run_sql` (um SELECT read-only pela mesma camada de segurança) e `run_python` (um trecho curto rodado num sandbox trancado) — e precisa *computar* o valor chamando-as. Todo número que ele reporta tem que aparecer num resultado de tool executada; se não aparecer, a resposta é marcada `grounded=False` em vez de ser confiada. O SQL executado, o código executado e as linhas-fonte viajam junto com a resposta.
+
+O sandbox é baseado em allow-list: o trecho é parseado para AST, e qualquer coisa fora de uma whitelist pequena — `import`, acesso a atributo (então não há escape via `__class__`/`__globals__`), `lambda`, laços `for`/`while`, chamadas a qualquer coisa fora de um conjunto fixo de builtins seguros — é rejeitada antes de uma linha rodar, sob `{"__builtins__": {}}` e com um timeout de parede como rede de segurança. É puro e totalmente coberto por testes (`tests/test_sandbox.py`).
+
+### Demo offline (sem API key, sem download)
+
+Um dataset **sintético** minúsculo vem em `sample_data/`, então dá para ver tudo rodar com um driver determinístico:
+
+```bash
+pip install -r requirements.txt
+python -m nl2sql.cli build-sample     # monta um DuckDB a partir de sample_data/
+python -m nl2sql.cli analyze          # a pergunta-demo embutida
+```
+
+```
+Answer:   The average order value is the mean of the per-order item totals computed above.
+Value:    159.0
+Grounded: True   (steps: 3)
+
+Trace (every number came from one of these executed steps):
+  [1] run_sql     SELECT order_id, SUM(price) AS order_total FROM order_items GROUP BY order_id ...
+  [2] run_python  result = round(sum(r['order_total'] for r in rows) / len(rows), 2)
+```
+
+Passe `--live` (com `ANTHROPIC_API_KEY` definida) para o Claude dirigir as tools e responder perguntas quaisquer.
+
+## Como rodar (o app Streamlit NL→SQL)
 
 ```bash
 pip install -r requirements.txt

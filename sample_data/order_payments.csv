@@ -1,0 +1,11 @@
+order_id,payment_type,payment_value
+O1,credit_card,135.00
+O2,credit_card,140.00
+O3,boleto,270.00
+O4,credit_card,177.00
+O5,voucher,135.00
+O6,credit_card,362.00
+O7,boleto,48.00
+O8,credit_card,37.00
+O9,credit_card,205.00
+O10,boleto,270.00

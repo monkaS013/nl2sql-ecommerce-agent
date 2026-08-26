@@ -13,6 +13,9 @@ data/*.csv
 # Graphify (leaks absolute local paths)
 graphify-out/
 
+# Spec / planning (not published)
+.specs/
+
 .pytest_cache/
 .DS_Store
 .vscode/
