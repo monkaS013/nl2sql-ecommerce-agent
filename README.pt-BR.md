@@ -11,7 +11,7 @@ Você digita "quais categorias de produto vendem mais?". O agente lê o schema d
 ## Por que é construído assim
 
 - **Prompt ciente do schema.** As tabelas e colunas reais são introspectadas do banco e entram no prompt, então o modelo escreve SQL contra nomes que ele realmente consegue ver.
-- **Camada de segurança de SQL.** Trato a saída do LLM como não-confiável, então há duas linhas de defesa. Um validador rejeita qualquer coisa que não seja um único SELECT/CTE read-only, e força um teto de linhas. Abaixo dele, a conexão DuckDB é aberta com `read_only=True`, então uma instrução que passe pelo validador ainda assim não consegue escrever. As duas regras são funções puras, e é por isso que os testes de segurança rodam sem banco e sem API key.
+- **Camada de segurança de SQL.** Trato a saída do LLM como não-confiável, então há duas linhas de defesa. Um validador rejeita qualquer coisa que não seja um único SELECT/CTE read-only, e força um teto de linhas. Abaixo dele, a conexão DuckDB é aberta com `read_only=True`, então uma instrução que passe pelo validador ainda assim não consegue escrever por essa conexão. As duas regras são funções puras, e é por isso que os testes de segurança rodam sem banco e sem API key.
 - **Loop de auto-reparo.** Uma query que falha (validação ou erro do banco) volta ao modelo com o erro, até um número definido de tentativas. O agente informa quantas tentativas levou.
 - **Uma fronteira de provedor.** Toda chamada ao modelo vive em `nl2sql/llm.py`. Trocar a Anthropic por outro provedor é uma mudança nesse único arquivo; o SDK é importado de forma preguiçosa, então o resto do pacote importa sem ele.
 
@@ -34,9 +34,9 @@ describe_schema(con) ──▶ llm.generate_sql() ──▶ safety.validate_sql(
 
 Text-to-SQL te devolve linhas. Mas quando a pergunta real é *"qual o ticket médio dos pedidos?"*, o que você quer de volta é um número só, e um modelo de linguagem consegue recitar um número sem nunca tê-lo calculado.
 
-O modo analista fecha essa lacuna com tool-calling sobre um sandbox. O agente tem duas tools. `run_sql` roda um SELECT read-only pela mesma camada de segurança; `run_python` roda um trecho curto num sandbox trancado. Ele precisa *computar* o valor chamando-as. Todo número da resposta final tem que aparecer num resultado de tool executada, e se não aparecer, a resposta volta marcada `grounded=False`. O SQL executado e o código executado viajam junto com a resposta, e as linhas-fonte também.
+O modo analista fecha essa lacuna com tool-calling sobre um sandbox. O agente tem duas tools. `run_sql` roda um SELECT read-only pela mesma camada de segurança; `run_python` roda um trecho curto num sandbox de AST restrito. Ele precisa *computar* o valor chamando-as. Todo número da resposta final tem que aparecer num resultado de tool executada, e se não aparecer, a resposta volta marcada `grounded=False`. O SQL executado e o código executado viajam junto com a resposta, e as linhas-fonte também.
 
-O sandbox funciona por allow-list. O trecho é parseado para AST, e a whitelist rejeita `import`, acesso a atributo (então não há escape via `__class__`/`__globals__`), `lambda`, laços `for`/`while` e chamadas a qualquer coisa fora de um conjunto fixo de builtins seguros, tudo antes de uma linha rodar. A execução acontece sob `{"__builtins__": {}}`, com um timeout de parede como rede de segurança. É puro e totalmente coberto por testes (`tests/test_sandbox.py`).
+O sandbox funciona por allow-list. O trecho é parseado para AST, e a whitelist rejeita `import`, acesso a atributo (o que fecha o caminho usual do `__class__`/`__globals__`), `lambda`, laços `for`/`while` e chamadas a qualquer coisa fora de um conjunto fixo de builtins seguros, tudo antes de uma linha rodar. A execução acontece sob `{"__builtins__": {}}`, com um timeout de parede como rede de segurança. É uma função pura, com testes próprios em `tests/test_sandbox.py`. É uma allow-list, não uma fronteira de segurança: eu não rodaria código de usuário não-confiável atrás dela.
 
 ### Demo offline (sem API key, sem download)
 
