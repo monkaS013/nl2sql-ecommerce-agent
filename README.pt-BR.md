@@ -2,16 +2,16 @@
 
 *[English](README.md)*
 
-Faça perguntas em linguagem natural a um dataset público de e-commerce e receba a resposta, o SQL por trás dela e o raciocínio do modelo. A parte interessante não é a chamada ao LLM — é a camada de segurança e o loop de auto-reparo em volta dela.
+Faça perguntas em linguagem natural a um dataset público de e-commerce. Você recebe a resposta, junto com o SQL por trás dela e o raciocínio do modelo. A chamada ao LLM é a parte fácil; o trabalho está na camada de segurança e no loop de auto-reparo em volta dela.
 
 ## O que faz
 
-Você digita "quais categorias de produto vendem mais?"; o agente lê o schema do banco ao vivo, escreve uma query DuckDB, confere que é um SELECT read-only, executa e mostra a tabela mais o SQL usado. Se a query dá erro, o erro do banco volta para o modelo corrigir o próprio SQL.
+Você digita "quais categorias de produto vendem mais?". O agente lê o schema do banco ao vivo, escreve uma query DuckDB, confere que é um SELECT read-only, executa e mostra a tabela junto com o SQL usado. Se a query dá erro, o erro do banco volta para o modelo corrigir o próprio SQL.
 
 ## Por que é construído assim
 
-- **Prompt ciente do schema.** As tabelas e colunas reais são introspectadas do banco e colocadas no prompt, então o modelo escreve SQL contra tabelas que existem, em vez de chutar nomes.
-- **Uma camada de segurança de SQL em que eu confio.** A saída do LLM nunca é confiável. Duas linhas de defesa: um validador que rejeita qualquer coisa que não seja um único SELECT/CTE read-only (e força um teto de linhas), e uma conexão DuckDB aberta com `read_only=True`, para que mesmo uma instrução que passe pelo validador não consiga escrever. As regras são funções puras — toda a segurança é testada sem banco e sem API key.
+- **Prompt ciente do schema.** As tabelas e colunas reais são introspectadas do banco e entram no prompt, então o modelo escreve SQL contra nomes que ele realmente consegue ver.
+- **Camada de segurança de SQL.** Trato a saída do LLM como não-confiável, então há duas linhas de defesa. Um validador rejeita qualquer coisa que não seja um único SELECT/CTE read-only, e força um teto de linhas. Abaixo dele, a conexão DuckDB é aberta com `read_only=True`, então uma instrução que passe pelo validador ainda assim não consegue escrever. As duas regras são funções puras, e é por isso que os testes de segurança rodam sem banco e sem API key.
 - **Loop de auto-reparo.** Uma query que falha (validação ou erro do banco) volta ao modelo com o erro, até um número definido de tentativas. O agente informa quantas tentativas levou.
 - **Uma fronteira de provedor.** Toda chamada ao modelo vive em `nl2sql/llm.py`. Trocar a Anthropic por outro provedor é uma mudança nesse único arquivo; o SDK é importado de forma preguiçosa, então o resto do pacote importa sem ele.
 
@@ -30,17 +30,17 @@ describe_schema(con) ──▶ llm.generate_sql() ──▶ safety.validate_sql(
                                                    Answer(sql, rows, attempts)
 ```
 
-## Modo analista — computa o número, não só escreve SQL
+## Modo analista
 
-Text-to-SQL te devolve linhas. Mas quando a pergunta real é *"qual o ticket médio dos pedidos?"*, a resposta é um **número** — e um modelo de linguagem recitando um número é um número em que você não pode confiar.
+Text-to-SQL te devolve linhas. Mas quando a pergunta real é *"qual o ticket médio dos pedidos?"*, o que você quer de volta é um número só, e um modelo de linguagem consegue recitar um número sem nunca tê-lo calculado.
 
-O modo analista fecha essa lacuna com **tool-calling sobre um sandbox**. O agente tem duas tools — `run_sql` (um SELECT read-only pela mesma camada de segurança) e `run_python` (um trecho curto rodado num sandbox trancado) — e precisa *computar* o valor chamando-as. Todo número que ele reporta tem que aparecer num resultado de tool executada; se não aparecer, a resposta é marcada `grounded=False` em vez de ser confiada. O SQL executado, o código executado e as linhas-fonte viajam junto com a resposta.
+O modo analista fecha essa lacuna com tool-calling sobre um sandbox. O agente tem duas tools. `run_sql` roda um SELECT read-only pela mesma camada de segurança; `run_python` roda um trecho curto num sandbox trancado. Ele precisa *computar* o valor chamando-as. Todo número da resposta final tem que aparecer num resultado de tool executada, e se não aparecer, a resposta volta marcada `grounded=False`. O SQL executado e o código executado viajam junto com a resposta, e as linhas-fonte também.
 
-O sandbox é baseado em allow-list: o trecho é parseado para AST, e qualquer coisa fora de uma whitelist pequena — `import`, acesso a atributo (então não há escape via `__class__`/`__globals__`), `lambda`, laços `for`/`while`, chamadas a qualquer coisa fora de um conjunto fixo de builtins seguros — é rejeitada antes de uma linha rodar, sob `{"__builtins__": {}}` e com um timeout de parede como rede de segurança. É puro e totalmente coberto por testes (`tests/test_sandbox.py`).
+O sandbox funciona por allow-list. O trecho é parseado para AST, e a whitelist rejeita `import`, acesso a atributo (então não há escape via `__class__`/`__globals__`), `lambda`, laços `for`/`while` e chamadas a qualquer coisa fora de um conjunto fixo de builtins seguros, tudo antes de uma linha rodar. A execução acontece sob `{"__builtins__": {}}`, com um timeout de parede como rede de segurança. É puro e totalmente coberto por testes (`tests/test_sandbox.py`).
 
 ### Demo offline (sem API key, sem download)
 
-Um dataset **sintético** minúsculo vem em `sample_data/`, então dá para ver tudo rodar com um driver determinístico:
+Um dataset sintético minúsculo vem em `sample_data/`, então dá para ver tudo rodar com um driver determinístico:
 
 ```bash
 pip install -r requirements.txt
@@ -65,7 +65,7 @@ Passe `--live` (com `ANTHROPIC_API_KEY` definida) para o Claude dirigir as tools
 ```bash
 pip install -r requirements.txt
 cp .env.example .env        # coloque sua ANTHROPIC_API_KEY
-# baixe os CSVs do Olist para data/ — veja data/README.md
+# baixe os CSVs do Olist para data/ (veja data/README.md)
 streamlit run app.py        # monte o banco pela sidebar e pergunte
 ```
 
@@ -83,4 +83,4 @@ Python · DuckDB · Anthropic (Claude) · Streamlit · pytest.
 
 ## Dataset
 
-Brazilian E-Commerce Public Dataset da Olist (público, ~100k pedidos). Não versionado — veja [data/README.md](data/README.md).
+Brazilian E-Commerce Public Dataset da Olist (público, ~100k pedidos). Não versionado no repo; veja [data/README.md](data/README.md).
